@@ -211,10 +211,17 @@ namespace FCG
         public void ClearCity()
         {
             if (!cityMaker)
-                cityMaker = GameObject.Find("City-Maker");
+                // استخدام الـ cache بدلاً من البحث المباشر
+                Transform cityMakerTransform = PerformanceHelper.FindTransformSafe("City-Maker");
+                if (cityMakerTransform != null)
+                    cityMaker = cityMakerTransform.gameObject;
+                else
+                    cityMaker = GameObject.Find("City-Maker");
+
 
             if (cityMaker)
-                DestroyImmediate(cityMaker);
+                PerformanceHelper.DestroyAsync(cityMaker);
+                ObjectCache.Instance.InvalidateCache("City-Maker");
 
             LastGenerationNetwork = new GenerationNetwork();
 
@@ -1198,7 +1205,17 @@ namespace FCG
         {
 
             if (GameObject.Find("ExitCity"))
-                return GameObject.Find("ExitCity").transform;
+                Transform exitCity = PerformanceHelper.FindTransformSafe("ExitCity");
+                if (exitCity != null)
+                    return exitCity;
+        
+                // إذا لم يكن في الـ cache، ابحث عنه
+                GameObject exitCityGO = GameObject.Find("ExitCity");
+                if (exitCityGO != null)
+                {
+                    PerformanceHelper.CacheTransform("ExitCity", exitCityGO.transform);
+                    return exitCityGO.transform;
+                }
             else
                 return null;
 
