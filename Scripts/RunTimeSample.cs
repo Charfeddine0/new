@@ -47,6 +47,10 @@ public class RunTimeSample : MonoBehaviour
     public bool createConnectionDebugLines = false;
     [Range(0f, 20f)] public float connectionDebugLineHeight = 3f;
     [Range(0f,1f)] public float satelliteBuildingDensity = 1f;
+    public int mapColumns = 1;
+    public int mapRows = 1;
+    public float mapSpacingX = 2500f;
+    public float mapSpacingZ = 2500f;
 
     [Header("Buildings")]
     [SerializeField] private bool withDownTownArea = true;

@@ -193,6 +193,7 @@ namespace FCG
         bool withDowntownArea = true;
         float downTownSize = 100;
         private int generationConnectionSegmentsCount = 0;
+        private bool gridMode = false;
         public GenerationStats LastGenerationStats { get; private set; } = new GenerationStats();
         public GenerationNetwork LastGenerationNetwork { get; private set; } = new GenerationNetwork();
         public event Action<GenerationStats, GenerationNetwork> OnGenerationCompleted;
@@ -288,7 +289,15 @@ namespace FCG
 
             request.Normalize();
 
-            GenerateCity(
+            if (request.mapColumns > 1 || request.mapRows > 1)
+            {
+                GenerateCityGrid(request);
+                return;
+            }
+
+            int generatedSatellites;
+            int generatedConnectionSegments;
+            LastGenerationNetwork = GenerateCityInternal(
                 request.citySize,
                 request.withSatelliteCity,
                 request.borderFlat,
@@ -321,7 +330,150 @@ namespace FCG
                 request.connectionStepOverride,
                 request.createCityAnchors,
                 request.createConnectionDebugLines,
-                request.connectionDebugLineHeight);
+                request.connectionDebugLineHeight,
+                Vector3.zero,
+                "City-Maker",
+                false,
+                out generatedSatellites,
+                out generatedConnectionSegments);
+
+            LastGenerationStats = new GenerationStats
+            {
+                citySize = request.citySize,
+                withSatelliteCity = request.withSatelliteCity,
+                generatedSatelliteCities = generatedSatellites,
+                generatedConnectionSegments = generatedConnectionSegments,
+                generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
+                generationDurationMs = 0f
+            };
+        }
+
+        private void GenerateCityGrid(CityGenerationRequest request)
+        {
+            if (request == null)
+                return;
+
+            float startTime = Time.realtimeSinceStartup;
+            if (cityMaker)
+                ClearCity();
+
+            cityMaker = new GameObject("City-Maker");
+
+            List<CityNetworkNode> combinedNodes = new List<CityNetworkNode>();
+            List<CityNetworkLink> combinedLinks = new List<CityNetworkLink>();
+            int generatedSatellites = 0;
+            int generatedConnectionSegments = 0;
+            int nodeIdOffset = 0;
+            bool firstMap = true;
+
+            for (int row = 0; row < request.mapRows; row++)
+            {
+                for (int col = 0; col < request.mapColumns; col++)
+                {
+                    Vector3 mapOffset = new Vector3(col * request.mapSpacingX, 0f, row * request.mapSpacingZ);
+                    int mapSatellites;
+                    int mapConnections;
+
+                    string mapRootName = $"City-Maker-{row}-{col}";
+                    GenerationNetwork mapNetwork = GenerateCityInternal(
+                        request.citySize,
+                        request.withSatelliteCity,
+                        request.borderFlat,
+                        request.satelliteCityCount,
+                        request.connectSatellitesToMain,
+                        request.connectSatellitesTogether,
+                        request.randomSatelliteLayout,
+                        request.useSatelliteSeed,
+                        request.satelliteSeed,
+                        request.randomSatelliteMin.x,
+                        request.randomSatelliteMax.x,
+                        request.randomSatelliteMin.y,
+                        request.randomSatelliteMax.y,
+                        request.customSatelliteOffsets,
+                        request.useCustomSatelliteOffsets,
+                        request.satelliteGlobalOffset,
+                        request.satelliteConnectionMode,
+                        request.satelliteMaxNeighborLinks,
+                        request.satelliteCloseLoop,
+                        request.useCitySeed,
+                        request.citySeed,
+                        request.autoSatelliteCount,
+                        request.randomSatelliteSizes,
+                        request.satelliteCityMinSize,
+                        request.satelliteCityMaxSize,
+                        request.satelliteBuildingDensity,
+                        false,
+                        request.withDownTownArea,
+                        request.downTownSize,
+                        request.connectionStepOverride,
+                        request.createCityAnchors,
+                        request.createConnectionDebugLines,
+                        request.connectionDebugLineHeight,
+                        mapOffset,
+                        mapRootName,
+                        true,
+                        out mapSatellites,
+                        out mapConnections);
+
+                    firstMap = false;
+                    generatedSatellites += mapSatellites;
+                    generatedConnectionSegments += mapConnections;
+
+                    if (mapNetwork != null)
+                    {
+                        foreach (CityNetworkNode node in mapNetwork.nodes)
+                        {
+                            if (node == null)
+                                continue;
+
+                            CityNetworkNode copy = new CityNetworkNode
+                            {
+                                id = nodeIdOffset + node.id,
+                                mainCity = node.mainCity,
+                                position = node.position,
+                                linkedNodeIds = (node.linkedNodeIds != null) ? new List<int>(node.linkedNodeIds.Select(id => id + nodeIdOffset)) : new List<int>()
+                            };
+                            combinedNodes.Add(copy);
+                        }
+
+                        foreach (CityNetworkLink link in mapNetwork.links)
+                        {
+                            if (link == null)
+                                continue;
+
+                            combinedLinks.Add(new CityNetworkLink
+                            {
+                                fromNodeId = nodeIdOffset + link.fromNodeId,
+                                toNodeId = nodeIdOffset + link.toNodeId,
+                                segments = link.segments,
+                                distance = link.distance,
+                                toMainCity = link.toMainCity
+                            });
+                        }
+
+                        nodeIdOffset += mapNetwork.nodes.Count;
+                    }
+                }
+            }
+
+            if (request.autoGenerateBuildings)
+                GenerateAllBuildings(request.withDownTownArea, request.downTownSize);
+
+            LastGenerationStats = new GenerationStats
+            {
+                citySize = request.citySize,
+                withSatelliteCity = request.withSatelliteCity,
+                generatedSatelliteCities = generatedSatellites,
+                generatedConnectionSegments = generatedConnectionSegments,
+                generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
+                generationDurationMs = (Time.realtimeSinceStartup - startTime) * 1000f
+            };
+
+            LastGenerationNetwork = new GenerationNetwork
+            {
+                nodes = combinedNodes,
+                links = combinedLinks
+            };
         }
 
         public void GenerateCity(
@@ -360,55 +512,177 @@ namespace FCG
             float connectionDebugLineHeight = 3f)
         {
             float startTime = Time.realtimeSinceStartup;
-            // If requested, seed the Unity RNG so generation is deterministic
+            int generatedSatellites;
+            int generatedConnectionSegments;
+            GenerationNetwork network = GenerateCityInternal(
+                size,
+                withSatteliteCity,
+                borderFlat,
+                satteliteCityCount,
+                connectSatteliteCities,
+                connectSatteliteCitiesTogether,
+                randomSatteliteLayout,
+                useSatteliteSeed,
+                satteliteSeed,
+                randomMinX,
+                randomMaxX,
+                randomMinZ,
+                randomMaxZ,
+                customSatteliteOffsets,
+                useCustomSatteliteOffsets,
+                satteliteGlobalOffset,
+                satelliteConnectionMode,
+                satelliteMaxNeighborLinks,
+                satelliteCloseLoop,
+                useCitySeed,
+                citySeed,
+                autoSatelliteCount,
+                randomSatelliteSizes,
+                satelliteCityMinSize,
+                satelliteCityMaxSize,
+                satelliteBuildingDensity,
+                autoGenerateBuildings,
+                withDownTownArea,
+                downTownSize,
+                connectionStepOverride,
+                createCityAnchors,
+                createConnectionDebugLines,
+                connectionDebugLineHeight,
+                Vector3.zero,
+                "City-Maker",
+                false,
+                out generatedSatellites,
+                out generatedConnectionSegments);
+
+            LastGenerationNetwork = network;
+            LastGenerationStats = new GenerationStats
+            {
+                citySize = size,
+                withSatelliteCity = withSatteliteCity,
+                generatedSatelliteCities = generatedSatellites,
+                generatedConnectionSegments = generatedConnectionSegments,
+                generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
+                generationDurationMs = (Time.realtimeSinceStartup - startTime) * 1000f
+            };
+            if (OnGenerationCompleted != null)
+                OnGenerationCompleted(LastGenerationStats, CloneGenerationNetwork(LastGenerationNetwork));
+        }
+
+        private GenerationNetwork GenerateCityInternal(
+            int size,
+            bool withSatteliteCity,
+            bool borderFlat,
+            int satelliteCityCount,
+            bool connectSatellitesToMain,
+            bool connectSatellitesTogether,
+            bool randomSatelliteLayout,
+            bool useSatelliteSeed,
+            int satelliteSeed,
+            float randomMinX,
+            float randomMaxX,
+            float randomMinZ,
+            float randomMaxZ,
+            List<Vector2> customSatelliteOffsets,
+            bool useCustomSatelliteOffsets,
+            Vector2 satelliteGlobalOffset,
+            SatelliteConnectionMode satelliteConnectionMode,
+            int satelliteMaxNeighborLinks,
+            bool satelliteCloseLoop,
+            bool useCitySeed,
+            int citySeed,
+            bool autoSatelliteCount,
+            bool randomSatelliteSizes,
+            int satelliteCityMinSize,
+            int satelliteCityMaxSize,
+            float satelliteBuildingDensity,
+            bool autoGenerateBuildings,
+            bool withDownTownArea,
+            float downTownSize,
+            float connectionStepOverride,
+            bool createCityAnchors,
+            bool createConnectionDebugLines,
+            float connectionDebugLineHeight,
+            Vector3 mapOffset,
+            string rootName,
+            bool gridMode,
+            out int generatedSatellites,
+            out int generatedConnectionSegments)
+        {
             if (useCitySeed)
             {
                 Random.InitState(citySeed);
             }
 
+            bool previousGridMode = this.gridMode;
+            GameObject previousCityMaker = cityMaker;
+            GameObject mapRoot = null;
+            if (gridMode)
+            {
+                mapRoot = new GameObject(rootName ?? "City-Maker");
+                if (previousCityMaker)
+                    mapRoot.transform.SetParent(previousCityMaker.transform, false);
+                if (mapOffset != Vector3.zero)
+                    mapRoot.transform.position = mapOffset;
+                cityMaker = mapRoot;
+            }
+
+            Transform entryExitTransform = null;
+            if (gridMode)
+            {
+                Transform existingExit = CityExitPosition();
+                if (existingExit != null)
+                {
+                    GameObject exitProxy = new GameObject($"ExitCity-Proxy-{rootName}");
+                    exitProxy.transform.SetParent(mapRoot != null ? mapRoot.transform : null, false);
+                    exitProxy.transform.position = existingExit.position + mapOffset;
+                    exitProxy.transform.rotation = existingExit.rotation;
+                    entryExitTransform = exitProxy.transform;
+                }
+            }
+
+            this.gridMode = gridMode;
             satelliteBuildingDensityField = Mathf.Clamp01(satelliteBuildingDensity);
             generationConnectionSegmentsCount = 0;
-            int generatedSatellites = 0;
+            generatedSatellites = 0;
             List<Vector3> satelliteCenters = new List<Vector3>();
             List<CityNetworkLink> generatedLinks = new List<CityNetworkLink>();
 
             if (!CanGenerate(size, withSatteliteCity, out string generationReason))
             {
                 Debug.LogError("CityGenerator: " + generationReason + " Load assets before generating streets.");
-                return;
+                generatedConnectionSegments = 0;
+                if (gridMode && mapRoot)
+                    DestroyImmediate(mapRoot);
+                cityMaker = previousCityMaker;
+                this.gridMode = previousGridMode;
+                return new GenerationNetwork();
             }
 
             bool satCity = false;
 
             if (size == 1)
             {
-                // Very Small City
                 satCity = GenerateStreetsVerySmall(borderFlat, withSatteliteCity);
             }
             else if (size == 2)
             {
-                // Small City
-                satCity = GenerateStreetsSmall(borderFlat, withSatteliteCity );
+                satCity = GenerateStreetsSmall(borderFlat, withSatteliteCity);
             }
             else if (size == 3)
             {
-                // Medium City
                 satCity = GenerateStreets(borderFlat, withSatteliteCity);
             }
             else if (size == 4)
             {
-                // Large City
                 satCity = GenerateStreetsBig(borderFlat, withSatteliteCity);
             }
 
-
             if (satCity)
             {
-                Transform exitPositipon = CityExitPosition();
-
-                if (exitPositipon != null)
+                Transform exitPosition = entryExitTransform ?? CityExitPosition();
+                if (exitPosition != null)
                 {
-                    int count = Mathf.Clamp(satteliteCityCount, 1, 64);
+                    int count = Mathf.Clamp(satelliteCityCount, 1, 64);
                     if (autoSatelliteCount)
                     {
                         int defaultCount = 1;
@@ -421,27 +695,26 @@ namespace FCG
                         }
                         count = Mathf.Clamp(defaultCount, 1, 64);
                     }
-                    List<SatelliteCityLayout> layouts;
 
-                    if (useCustomSatteliteOffsets && customSatteliteOffsets != null && customSatteliteOffsets.Count > 0)
-                        layouts = BuildCustomSatelliteLayouts(customSatteliteOffsets);
-                    else if (randomSatteliteLayout)
-                        layouts = BuildRandomSatelliteLayouts(count, randomMinX, randomMaxX, randomMinZ, randomMaxZ, useSatteliteSeed, satteliteSeed);
+                    List<SatelliteCityLayout> layouts;
+                    if (useCustomSatelliteOffsets && customSatelliteOffsets != null && customSatelliteOffsets.Count > 0)
+                        layouts = BuildCustomSatelliteLayouts(customSatelliteOffsets);
+                    else if (randomSatelliteLayout)
+                        layouts = BuildRandomSatelliteLayouts(count, randomMinX, randomMaxX, randomMinZ, randomMaxZ, useSatelliteSeed, satelliteSeed);
                     else
                         layouts = BuildSatelliteLayouts(count);
 
                     for (int i = 0; i < layouts.Count; i++)
                     {
                         SatelliteCityLayout layout = layouts[i];
-                        layout.x += satteliteGlobalOffset.x;
-                        layout.z += satteliteGlobalOffset.y;
+                        layout.x += satelliteGlobalOffset.x;
+                        layout.z += satelliteGlobalOffset.y;
                         layouts[i] = layout;
                     }
 
                     for (int i = 0; i < layouts.Count; i++)
                     {
                         SatelliteCityLayout layout = layouts[i];
-
                         int satSize = 1;
                         if (randomSatelliteSizes)
                         {
@@ -451,41 +724,42 @@ namespace FCG
                             satSize = Random.Range(minS, maxS + 1);
                         }
 
-                        // Generate satellite city with selected size
                         switch (satSize)
                         {
                             case 1:
-                                GenerateStreetsVerySmall(false, false, true, layout.x, layout.z, exitPositipon);
+                                GenerateStreetsVerySmall(false, false, true, layout.x, layout.z, exitPosition);
                                 break;
                             case 2:
-                                GenerateStreetsSmall(false, false, true, layout.x, layout.z, exitPositipon);
+                                GenerateStreetsSmall(false, false, true, layout.x, layout.z, exitPosition);
                                 break;
                             case 3:
-                                GenerateStreets(false, false, true, layout.x, layout.z, exitPositipon);
+                                GenerateStreets(false, false, true, layout.x, layout.z, exitPosition);
                                 break;
                             case 4:
-                                GenerateStreetsBig(false, false, true, layout.x, layout.z, exitPositipon);
+                                GenerateStreetsBig(false, false, true, layout.x, layout.z, exitPosition);
                                 break;
                             default:
-                                GenerateStreetsVerySmall(false, false, true, layout.x, layout.z, exitPositipon);
+                                GenerateStreetsVerySmall(false, false, true, layout.x, layout.z, exitPosition);
                                 break;
                         }
 
                         generatedSatellites++;
-
-                        Vector3 satPosition = GetSatellitePositionFromExit(exitPositipon, layout.x, layout.z);
+                        Vector3 satPosition = GetSatellitePositionFromExit(exitPosition, layout.x, layout.z);
+                        if (gridMode)
+                            satPosition += mapOffset;
                         satelliteCenters.Add(satPosition);
 
-                        if (connectSatteliteCities)
+                        if (connectSatellitesToMain)
                         {
-                            int segments = ConnectCities(exitPositipon.position, satPosition, connectionStepOverride);
+                            Vector3 rootExit = exitPosition.position;
+                            int segments = ConnectCities(rootExit, satPosition, connectionStepOverride);
                             generationConnectionSegmentsCount += segments;
                             if (segments > 0)
-                                generatedLinks.Add(CreateNetworkLink(0, i + 1, exitPositipon.position, satPosition, segments, true));
+                                generatedLinks.Add(CreateNetworkLink(0, i + 1, rootExit, satPosition, segments, true));
                         }
                     }
 
-                    if (connectSatteliteCitiesTogether && satelliteCenters.Count > 1)
+                    if (connectSatellitesTogether && satelliteCenters.Count > 1)
                         generationConnectionSegmentsCount += ConnectSatelliteNetwork(
                             satelliteCenters,
                             satelliteConnectionMode,
@@ -498,12 +772,8 @@ namespace FCG
                 else
                 {
                     Debug.Log("ExitCity gameobject not found");
-
                 }
-
             }
-
-
 
             DayNight dayNight = FindObjectOfType<DayNight>();
             if (dayNight)
@@ -512,30 +782,41 @@ namespace FCG
             if (!cityMaker)
                 cityMaker = GameObject.Find("City-Maker");
 
-            Vector3 mainCityPosition = ResolveMainCityPosition();
-            LastGenerationNetwork = BuildGenerationNetwork(mainCityPosition, satelliteCenters, generatedLinks);
+            Vector3 mainCityPosition = gridMode ? (cityMaker ? cityMaker.transform.position : Vector3.zero) : ResolveMainCityPosition();
+            GenerationNetwork network = BuildGenerationNetwork(mainCityPosition, satelliteCenters, generatedLinks);
 
             if (autoGenerateBuildings)
                 GenerateAllBuildings(withDownTownArea, downTownSize);
 
+            if (gridMode && mapRoot != null && mapOffset != Vector3.zero)
+            {
+                foreach (Transform child in mapRoot.transform)
+                {
+                    child.position += mapOffset;
+                }
+            }
+
             if (createCityAnchors)
-                BuildGeneratedNetworkAnchors(LastGenerationNetwork, createConnectionDebugLines, connectionDebugLineHeight);
+                BuildGeneratedNetworkAnchors(network, createConnectionDebugLines, connectionDebugLineHeight);
             else
                 ClearGeneratedNetworkAnchors();
 
-            LastGenerationStats = new GenerationStats
+            generatedConnectionSegments = generationConnectionSegmentsCount;
+
+            if (gridMode)
             {
-                citySize = size,
-                withSatelliteCity = withSatteliteCity,
-                generatedSatelliteCities = generatedSatellites,
-                generatedConnectionSegments = generationConnectionSegmentsCount,
-                generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
-                generationDurationMs = (Time.realtimeSinceStartup - startTime) * 1000f
-            };
+                cityMaker = previousCityMaker;
+                this.gridMode = previousGridMode;
+                if (entryExitTransform != null)
+                    DestroyImmediate(entryExitTransform.gameObject);
+            }
+            else
+            {
+                // Keep generated cityMaker for normal generation
+                this.gridMode = previousGridMode;
+            }
 
-            if (OnGenerationCompleted != null)
-                OnGenerationCompleted(LastGenerationStats, CloneGenerationNetwork(LastGenerationNetwork));
-
+            return network;
         }
 
         public string GetLastGenerationSummary()
@@ -1174,8 +1455,15 @@ namespace FCG
 
             if (!satteliteCity)
             {
-                ClearCity();
-                cityMaker = new GameObject("City-Maker");
+                if (!gridMode)
+                {
+                    ClearCity();
+                    cityMaker = new GameObject("City-Maker");
+                }
+                else if (!cityMaker)
+                {
+                    cityMaker = new GameObject("City-Maker");
+                }
             }
 
             GameObject block;
@@ -1227,10 +1515,15 @@ namespace FCG
 
             if (!satteliteCity)
             {
-                ClearCity();
-
-                cityMaker = new GameObject("City-Maker");
-
+                if (!gridMode)
+                {
+                    ClearCity();
+                    cityMaker = new GameObject("City-Maker");
+                }
+                else if (!cityMaker)
+                {
+                    cityMaker = new GameObject("City-Maker");
+                }
             }
 
             if (!satteliteCity)
@@ -1316,10 +1609,15 @@ namespace FCG
 
             if (!satteliteCity)
             {
-
-                ClearCity();
-
-                cityMaker = new GameObject("City-Maker");
+                if (!gridMode)
+                {
+                    ClearCity();
+                    cityMaker = new GameObject("City-Maker");
+                }
+                else if (!cityMaker)
+                {
+                    cityMaker = new GameObject("City-Maker");
+                }
             }
 
             if (!satteliteCity)
@@ -1422,10 +1720,15 @@ namespace FCG
 
             if (!satteliteCity)
             {
-
-                ClearCity();
-
-                cityMaker = new GameObject("City-Maker");
+                if (!gridMode)
+                {
+                    ClearCity();
+                    cityMaker = new GameObject("City-Maker");
+                }
+                else if (!cityMaker)
+                {
+                    cityMaker = new GameObject("City-Maker");
+                }
             }
 
             distCenter = 350;

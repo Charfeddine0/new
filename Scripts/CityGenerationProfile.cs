@@ -47,5 +47,11 @@ namespace FCG
         [Header("Traffic")]
         public bool rightHand = true;
         public bool japanTrafficLight = false;
+
+        [Header("Map Grid")]
+        public int mapColumns = 1;
+        public int mapRows = 1;
+        public float mapSpacingX = 2500f;
+        public float mapSpacingZ = 2500f;
     }
 }

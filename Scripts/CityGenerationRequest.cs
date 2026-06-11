@@ -37,6 +37,10 @@ namespace FCG
         public bool createConnectionDebugLines = false;
         public float connectionDebugLineHeight = 3f;
         [Range(0f,1f)] public float satelliteBuildingDensity = 1f;
+        public int mapColumns = 1;
+        public int mapRows = 1;
+        public float mapSpacingX = 2500f;
+        public float mapSpacingZ = 2500f;
 
         public void Normalize()
         {
@@ -45,6 +49,10 @@ namespace FCG
             satelliteMaxNeighborLinks = Mathf.Clamp(satelliteMaxNeighborLinks, 1, 6);
             satelliteCityMinSize = Mathf.Clamp(satelliteCityMinSize, 1, 4);
             satelliteCityMaxSize = Mathf.Clamp(satelliteCityMaxSize, 1, 4);
+            mapColumns = Mathf.Max(1, mapColumns);
+            mapRows = Mathf.Max(1, mapRows);
+            mapSpacingX = Mathf.Max(0f, mapSpacingX);
+            mapSpacingZ = Mathf.Max(0f, mapSpacingZ);
             connectionStepOverride = Mathf.Max(0f, connectionStepOverride);
             connectionDebugLineHeight = Mathf.Clamp(connectionDebugLineHeight, 0f, 20f);
 
@@ -118,6 +126,10 @@ namespace FCG
                 : new List<Vector2>();
             request.useCustomSatelliteOffsets = !request.randomSatelliteLayout && request.customSatelliteOffsets.Count > 0;
             request.randomSatelliteSizes = profile.randomSatelliteSizes;
+            request.mapColumns = profile.mapColumns;
+            request.mapRows = profile.mapRows;
+            request.mapSpacingX = profile.mapSpacingX;
+            request.mapSpacingZ = profile.mapSpacingZ;
             request.satelliteCityMinSize = profile.satelliteCityMinSize;
             request.satelliteCityMaxSize = profile.satelliteCityMaxSize;
             request.Normalize();
