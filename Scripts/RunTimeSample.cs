@@ -229,23 +229,38 @@ public class RunTimeSample : MonoBehaviour
 
     public void GenerateCityAtRuntime()
     {
-        if (!TryResolveGenerator())
-            return;
-
-        if (clearBeforeGenerate)
-            generator.ClearCity();
-
-        ClearCars();
-
-        if (useRequestObject && request != null)
+        try
         {
-            if (requestFollowsInspector)
-                SyncRequestFromInspector();
-            else
-                request.citySize = Mathf.Clamp(this.citySize, 1, 4);
-            request.Normalize();
-            generator.GenerateCity(request);
-        }
+            if (!TryResolveGenerator())
+            {
+                Debug.LogError("لم يتمكن من إيجاد مولد المدينة (CityGenerator)");
+                return;
+            }
+
+            if (clearBeforeGenerate)
+                generator.ClearCity();
+
+            ClearCars();
+
+            if (useRequestObject && request != null)
+            {
+                try
+                {
+                    if (requestFollowsInspector)
+                        SyncRequestFromInspector();
+                    else
+                        request.citySize = Mathf.Clamp(this.citySize, 1, 4);
+                    
+                    request.Normalize();
+                    request.Validate();
+                    generator.GenerateCity(request);
+                }
+                catch (ConfigurationException ex)
+                {
+                    Debug.LogError($"خطأ في إعدادات الطلب: {ex.Message}");
+                    throw;
+                }
+            }
         else
         {
             bool useCustom = withSatelliteCity
@@ -290,6 +305,15 @@ public class RunTimeSample : MonoBehaviour
                 createCityAnchors,
                 createConnectionDebugLines,
                 connectionDebugLineHeight);
+        }
+        }
+        catch (CityGeneratorException ex)
+        {
+            Debug.LogError($"خطأ في توليد المدينة: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"خطأ غير متوقع أثناء توليد المدينة: {ex.Message}\n{ex.StackTrace}");
         }
     }
 

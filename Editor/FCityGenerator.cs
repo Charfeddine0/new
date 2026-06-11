@@ -704,99 +704,132 @@ public class FCityGenerator : EditorWindow
 
     private void GenerateCity(int size, bool borderFlat = false)
     {
-
-        LoadAssets();
-
-        EnsureCustomSatellitePoints();
-
-        bool useRandomLayout = withSatteliteCity && satelliteLayoutMode == SatelliteLayoutMode.Random;
-        bool useCustomLayout = withSatteliteCity && satelliteLayoutMode == SatelliteLayoutMode.Custom;
-
-        List<Vector2> customOffsets = useCustomLayout ? BuildEnabledCustomSatelliteOffsets() : null;
-        int effectiveSatelliteCount = satteliteCityCount;
-        if (useCustomLayout)
-            effectiveSatelliteCount = Mathf.Max(1, (customOffsets != null) ? customOffsets.Count : 0);
-
-        if (!cityGenerator.CanGenerate(size, withSatteliteCity, out string canGenerateReason))
+        try
         {
-            generationStatus = "Cannot generate: " + canGenerateReason;
-            return;
+            LoadAssets();
+
+            EnsureCustomSatellitePoints();
+
+            bool useRandomLayout = withSatteliteCity && satelliteLayoutMode == SatelliteLayoutMode.Random;
+            bool useCustomLayout = withSatteliteCity && satelliteLayoutMode == SatelliteLayoutMode.Custom;
+
+            List<Vector2> customOffsets = useCustomLayout ? BuildEnabledCustomSatelliteOffsets() : null;
+            int effectiveSatelliteCount = satteliteCityCount;
+            if (useCustomLayout)
+                effectiveSatelliteCount = Mathf.Max(1, (customOffsets != null) ? customOffsets.Count : 0);
+
+            if (!cityGenerator.CanGenerate(size, withSatteliteCity, out string canGenerateReason))
+            {
+                throw new ConfigurationException(
+                    $"لا يمكن توليد المدينة: {canGenerateReason}",
+                    "size"
+                );
+            }
+
+            cityGenerator.GenerateCity(
+                size,
+                withSatteliteCity,
+                borderFlat,
+                effectiveSatelliteCount,
+                connectSatteliteCities,
+                connectSatteliteCitiesTogether,
+                useRandomLayout,
+                useSatteliteSeed,
+                satteliteSeed,
+                randomSatelliteMinX,
+                randomSatelliteMaxX,
+                randomSatelliteMinZ,
+                randomSatelliteMaxZ,
+                customOffsets,
+                useCustomLayout,
+                satteliteGlobalOffset,
+                satelliteConnectionMode,
+                satelliteMaxNeighborLinks,
+                satelliteCloseLoop,
+                satelliteConnectionStep,
+                createCityAnchors,
+                createConnectionDebugLines,
+                connectionDebugLineHeight);
+
+            generationStatus = cityGenerator.GetLastGenerationSummary();
+
+            if (autoGenerateBuildingsAfterStreets)
+            {
+                cityGenerator.GenerateAllBuildings(withDowntownArea, downTownSize);
+                enableUpdate = 1;
+                generationStatus += " | Buildings: generated";
+            }
+
+            if (trafficSystem)
+            {
+                InverseCarDirection((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
+                trafficSystem.UpdateAllWayPoints();
+            }
+
+            DestroyImmediate(GameObject.Find("CarContainer"));
+
+            if (autoAddTrafficAfterStreets)
+            {
+                AddVehicles((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
+                generationStatus += " | Traffic: refreshed";
+            }
+
+            SaveEditorStateToPrefs();
         }
-
-        cityGenerator.GenerateCity(
-            size,
-            withSatteliteCity,
-            borderFlat,
-            effectiveSatelliteCount,
-            connectSatteliteCities,
-            connectSatteliteCitiesTogether,
-            useRandomLayout,
-            useSatteliteSeed,
-            satteliteSeed,
-            randomSatelliteMinX,
-            randomSatelliteMaxX,
-            randomSatelliteMinZ,
-            randomSatelliteMaxZ,
-            customOffsets,
-            useCustomLayout,
-            satteliteGlobalOffset,
-            satelliteConnectionMode,
-            satelliteMaxNeighborLinks,
-            satelliteCloseLoop,
-            satelliteConnectionStep,
-            createCityAnchors,
-            createConnectionDebugLines,
-            connectionDebugLineHeight);
-
-        generationStatus = cityGenerator.GetLastGenerationSummary();
-
-        if (autoGenerateBuildingsAfterStreets)
+        catch (ConfigurationException ex)
         {
-            cityGenerator.GenerateAllBuildings(withDowntownArea, downTownSize);
-            enableUpdate = 1;
-            generationStatus += " | Buildings: generated";
+            generationStatus = $"خطأ: {ex.Message}";
+            Debug.LogError(generationStatus);
         }
-
-        if (trafficSystem)
+        catch (GenerationException ex)
         {
-            InverseCarDirection((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
-
-            trafficSystem.UpdateAllWayPoints();
-
+            generationStatus = $"خطأ في التوليد: {ex.Message}";
+            Debug.LogError(generationStatus);
         }
-
-
-        DestroyImmediate(GameObject.Find("CarContainer"));
-
-        if (autoAddTrafficAfterStreets)
+        catch (CityGeneratorException ex)
         {
-            AddVehicles((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
-            generationStatus += " | Traffic: refreshed";
+            generationStatus = $"خطأ: {ex.Message}";
+            Debug.LogError(generationStatus);
         }
-
-        SaveEditorStateToPrefs();
-
-
+        catch (Exception ex)
+        {
+            generationStatus = $"خطأ غير متوقع: {ex.Message}";
+            Debug.LogError(generationStatus + "\n" + ex.StackTrace);
+        }
     }
 
     private void GenerateFullPipeline(int size, bool clearBefore = true)
     {
-        if (clearBefore && cityGenerator)
-            cityGenerator.ClearCity();
-
-        GenerateCity(size, borderFlat);
-
-        if (!autoGenerateBuildingsAfterStreets && GameObject.Find("Marcador"))
+        try
         {
-            LoadAssets(true);
-            cityGenerator.GenerateAllBuildings(withDowntownArea, downTownSize);
-            enableUpdate = 1;
+            if (clearBefore && cityGenerator)
+                cityGenerator.ClearCity();
+
+            GenerateCity(size, borderFlat);
+
+            if (!autoGenerateBuildingsAfterStreets && GameObject.Find("Marcador"))
+            {
+                try
+                {
+                    LoadAssets(true);
+                    cityGenerator.GenerateAllBuildings(withDowntownArea, downTownSize);
+                    enableUpdate = 1;
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"خطأ في توليد المباني: {ex.Message}");
+                }
+            }
+
+            if (!autoAddTrafficAfterStreets)
+                AddVehicles((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
+
+            SaveEditorStateToPrefs();
         }
-
-        if (!autoAddTrafficAfterStreets)
-            AddVehicles((trafficLightHand == 1 && japanTrafficLight) ? 2 : trafficLightHand);
-
-        SaveEditorStateToPrefs();
+        catch (Exception ex)
+        {
+            Debug.LogError($"خطأ في خط أنابيب التوليد الكامل: {ex.Message}\n{ex.StackTrace}");
+        }
     }
 
 

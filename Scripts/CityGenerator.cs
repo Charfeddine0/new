@@ -9,6 +9,9 @@ namespace FCG
 {
     public class CityGenerator : MonoBehaviour
     {
+        /// <summary>
+        /// طرق الاتصال بين المدن الفضائية
+        /// </summary>
         public enum SatelliteConnectionMode
         {
             MainOnly = 0,
@@ -198,6 +201,13 @@ namespace FCG
         public GenerationNetwork LastGenerationNetwork { get; private set; } = new GenerationNetwork();
         public event Action<GenerationStats, GenerationNetwork> OnGenerationCompleted;
 
+        /// <summary>
+        /// مسح المدينة المُولدة بالكامل
+        /// </summary>
+        /// <remarks>
+        /// تحذف جميع الكائنات تحت "City-Maker" وتعيد شبكة المدينة للحالة الفارغة.
+        /// استخدم هذه الطريقة قبل توليد مدينة جديدة.
+        /// </remarks>
         public void ClearCity()
         {
             if (!cityMaker)
@@ -210,6 +220,13 @@ namespace FCG
 
         }
 
+        /// <summary>
+        /// التحقق من أن جميع الأصول المطلوبة متوفرة قبل التوليد
+        /// </summary>
+        /// <param name="size">حجم المدينة (1=صغير جداً، 4=كبير)</param>
+        /// <param name="withSatteliteCity">هل تحتوي على مدن فضائية</param>
+        /// <param name="reason">رسالة الخطأ التفصيلية إذا فشل التحقق</param>
+        /// <returns>true إذا كانت جميع الأصول جاهزة، false خلاف ذلك</returns>
         public bool CanGenerate(int size, bool withSatteliteCity, out string reason)
         {
             if (largeBlocks == null || largeBlocks.Length == 0)
@@ -279,6 +296,23 @@ namespace FCG
             return true;
         }
 
+        /// <summary>
+        /// توليد مدينة بناءً على طلب توليد مخصص
+        /// </summary>
+        /// <param name="request">إعدادات التوليد الكاملة - إذا كان null سيتم استخدام الإعدادات الافتراضية</param>
+        /// <remarks>
+        /// تدعم هذه الطريقة:
+        /// - توليد خرائط متعددة عند تعيين mapColumns > 1 أو mapRows > 1
+        /// - توليد المباني والشوارع والمدن الفضائية
+        /// - يتم تطبيع جميع قيم الطلب تلقائياً
+        /// 
+        /// التسلسل:
+        /// 1. تحقق من صحة الطلب وتطبيعه
+        /// 2. إذا كانت خريطة متعددة، اتصل بـ GenerateCityGrid
+        /// 3. وإلا اتصل بـ GenerateCityInternal مباشرة
+        /// 4. حدّث LastGenerationStats و LastGenerationNetwork
+        /// </remarks>
+        /// <exception cref="InvalidOperationException">إذا لم تكن الأصول المطلوبة موجودة</exception>
         public void GenerateCity(CityGenerationRequest request)
         {
             if (request == null)
@@ -287,13 +321,19 @@ namespace FCG
                 request = new CityGenerationRequest();
             }
 
-            request.Normalize();
-
-            if (request.mapColumns > 1 || request.mapRows > 1)
+            try
             {
-                GenerateCityGrid(request);
-                return;
-            }
+                // تطبيع الإعدادات
+                request.Normalize();
+                
+                // التحقق من صحة الإعدادات
+                request.Validate();
+
+                if (request.mapColumns > 1 || request.mapRows > 1)
+                {
+                    GenerateCityGrid(request);
+                    return;
+                }
 
             int generatedSatellites;
             int generatedConnectionSegments;
@@ -337,44 +377,79 @@ namespace FCG
                 out generatedSatellites,
                 out generatedConnectionSegments);
 
-            LastGenerationStats = new GenerationStats
+                LastGenerationStats = new GenerationStats
+                {
+                    citySize = request.citySize,
+                    withSatelliteCity = request.withSatelliteCity,
+                    generatedSatelliteCities = generatedSatellites,
+                    generatedConnectionSegments = generatedConnectionSegments,
+                    generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
+                    generationDurationMs = 0f
+                };
+                
+                if (OnGenerationCompleted != null)
+                    OnGenerationCompleted(LastGenerationStats, CloneGenerationNetwork(LastGenerationNetwork));
+            }
+            catch (ConfigurationException ex)
             {
-                citySize = request.citySize,
-                withSatelliteCity = request.withSatelliteCity,
-                generatedSatelliteCities = generatedSatellites,
-                generatedConnectionSegments = generatedConnectionSegments,
-                generatedCityObjectCount = cityMaker ? cityMaker.transform.childCount : 0,
-                generationDurationMs = 0f
-            };
+                Debug.LogError($"خطأ في الإعدادات: {ex.Message}\nرمز الخطأ: {ex.ErrorCode}");
+                throw;
+            }
+            catch (AssetValidationException ex)
+            {
+                Debug.LogError($"خطأ في التحقق من الأصول: {ex.Message}\nالأصول المفقودة: {string.Join(", ", ex.MissingAssets)}");
+                throw;
+            }
+            catch (GenerationException ex)
+            {
+                Debug.LogError($"خطأ في التوليد (مرحلة: {ex.GenerationPhase}): {ex.Message}");
+                ClearCity();
+                throw;
+            }
+            catch (CityGeneratorException ex)
+            {
+                Debug.LogError($"خطأ في مولد المدينة: {ex.Message}\nرمز الخطأ: {ex.ErrorCode}");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"خطأ غير متوقع في توليد المدينة: {ex.Message}\n{ex.StackTrace}");
+                ClearCity();
+                throw new GenerationException("خطأ غير متوقع أثناء التوليد", ex, "UNKNOWN");
+            }
         }
 
         private void GenerateCityGrid(CityGenerationRequest request)
         {
-            if (request == null)
-                return;
-
-            float startTime = Time.realtimeSinceStartup;
-            if (cityMaker)
-                ClearCity();
-
-            cityMaker = new GameObject("City-Maker");
-
-            List<CityNetworkNode> combinedNodes = new List<CityNetworkNode>();
-            List<CityNetworkLink> combinedLinks = new List<CityNetworkLink>();
-            int generatedSatellites = 0;
-            int generatedConnectionSegments = 0;
-            int nodeIdOffset = 0;
-            bool firstMap = true;
-
-            for (int row = 0; row < request.mapRows; row++)
+            try
             {
-                for (int col = 0; col < request.mapColumns; col++)
-                {
-                    Vector3 mapOffset = new Vector3(col * request.mapSpacingX, 0f, row * request.mapSpacingZ);
-                    int mapSatellites;
-                    int mapConnections;
+                if (request == null)
+                    throw new ConfigurationException("CityGenerationRequest لا يمكن أن تكون null");
 
-                    string mapRootName = $"City-Maker-{row}-{col}";
+                float startTime = Time.realtimeSinceStartup;
+                if (cityMaker)
+                    ClearCity();
+
+                cityMaker = new GameObject("City-Maker");
+
+                List<CityNetworkNode> combinedNodes = new List<CityNetworkNode>();
+                List<CityNetworkLink> combinedLinks = new List<CityNetworkLink>();
+                int generatedSatellites = 0;
+                int generatedConnectionSegments = 0;
+                int nodeIdOffset = 0;
+                bool firstMap = true;
+
+                for (int row = 0; row < request.mapRows; row++)
+                {
+                    for (int col = 0; col < request.mapColumns; col++)
+                    {
+                        try
+                        {
+                            Vector3 mapOffset = new Vector3(col * request.mapSpacingX, 0f, row * request.mapSpacingZ);
+                            int mapSatellites;
+                            int mapConnections;
+
+                            string mapRootName = $"City-Maker-{row}-{col}";
                     GenerationNetwork mapNetwork = GenerateCityInternal(
                         request.citySize,
                         request.withSatelliteCity,
@@ -474,6 +549,25 @@ namespace FCG
                 nodes = combinedNodes,
                 links = combinedLinks
             };
+            }
+            catch (ConfigurationException ex)
+            {
+                Debug.LogError($"خطأ في إعدادات الخريطة: {ex.Message}");
+                ClearCity();
+                throw;
+            }
+            catch (GenerationException ex)
+            {
+                Debug.LogError($"خطأ في توليد المدينة (مرحلة: {ex.GenerationPhase}): {ex.Message}");
+                ClearCity();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"خطأ غير متوقع في توليد شبكة المدن: {ex.Message}\n{ex.StackTrace}");
+                ClearCity();
+                throw new GenerationException("خطأ في توليد شبكة المدن", ex, "GRID_GENERATION");
+            }
         }
 
         public void GenerateCity(
@@ -819,6 +913,19 @@ namespace FCG
             return network;
         }
 
+        /// <summary>
+        /// الحصول على ملخص آخر توليد
+        /// </summary>
+        /// <returns>نص يصف إحصائيات التوليد الأخير</returns>
+        /// <remarks>
+        /// يتضمن الملخص:
+        /// - حجم المدينة
+        /// - حالة المدن الفضائية
+        /// - عدد المدن الفضائية المولدة
+        /// - عدد قطاعات الاتصال
+        /// - عدد الكائنات المولدة
+        /// - وقت التوليد بالميلي ثانية
+        /// </remarks>
         public string GetLastGenerationSummary()
         {
             if (LastGenerationStats == null)
@@ -834,6 +941,10 @@ namespace FCG
                 LastGenerationStats.generationDurationMs);
         }
 
+        /// <summary>
+        /// الحصول على ملخص شبكة المدينة المولدة
+        /// </summary>
+        /// <returns>نص يصف عدد العقد والروابط والأقمار الصناعية</returns>
         public string GetLastGenerationNetworkSummary()
         {
             if (LastGenerationNetwork == null || LastGenerationNetwork.nodes == null || LastGenerationNetwork.nodes.Count == 0)
@@ -1884,6 +1995,25 @@ namespace FCG
 
         private GameObject pB;
 
+        /// <summary>
+        /// توليد جميع المباني في المدينة المولدة
+        /// </summary>
+        /// <param name="_withDowntownArea">إضافة منطقة وسط البلد بمباني عالية</param>
+        /// <param name="_downTownSize">حجم منطقة وسط البلد (50-200)</param>
+        /// <remarks>
+        /// يجب استدعاء هذه الطريقة بعد توليد الشوارع مباشرة.
+        /// تعتمد على وجود المباني والشوارع المولدة بالفعل.
+        /// 
+        /// تملأ المباني:
+        /// - الزوايا (EB, EC)
+        /// - الأسطر (متوازية للشوارع)
+        /// - الكتل المزدوجة (عبر الشارع)
+        /// 
+        /// التأثيرات:
+        /// - يسجل عدد المباني المولدة
+        /// - يحدث أشعة الضوء للعثور على الأسلاليم
+        /// - يقوم بتحديث مادة DayNight إذا كانت موجودة
+        /// </remarks>
         public void GenerateAllBuildings(bool _withDowntownArea, float _downTownSize)
         {
             if (!ValidateBuildingPrefabPools(out string prefabError))
